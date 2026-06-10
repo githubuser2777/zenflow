@@ -1,0 +1,12 @@
+*.exe
+*.log
+vendor/
+.env
+config.json
+.agents/
+dist/
+*.test
+*.out
+*.txt
+.tmp_go_cache/
+.clinerules-review
