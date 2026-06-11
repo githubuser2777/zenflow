@@ -34,7 +34,7 @@ jobs:
         if [ "${{ matrix.goos }}" = "windows" ]; then
           OUTPUT_NAME="${OUTPUT_NAME}.exe"
         fi
-        go build -v -o $OUTPUT_NAME ./cmd/proxy
+        go build -v -trimpath -ldflags="-s -w" -o $OUTPUT_NAME ./cmd/proxy
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
