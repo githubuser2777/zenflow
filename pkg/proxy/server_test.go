@@ -107,3 +107,51 @@ func TestCookieScrubbingEdgeCases(t *testing.T) {
 	resp, _ := client.Do(req)
 	resp.Body.Close()
 }
+
+func TestContainsIgnoreCase(t *testing.T) {
+	tests := []struct {
+		s      string
+		substr string
+		want   bool
+	}{
+		{"", "", true},
+		{"hello", "", true},
+		{"", "hello", false},
+		{"hello", "HEllo", true},
+		{"HELLO", "hello", true},
+		{"abcdef", "cd", true},
+		{"abcdef", "CD", true},
+		{"abcdef", "cx", false},
+		{"Private, no-cache", "private", true},
+		{"Private, no-cache", "no-cache", true},
+		{"Private, no-cache", "no-store", false},
+	}
+
+	for _, tt := range tests {
+		got := containsIgnoreCase(tt.s, tt.substr)
+		if got != tt.want {
+			t.Errorf("containsIgnoreCase(%q, %q) = %v; want %v", tt.s, tt.substr, got, tt.want)
+		}
+	}
+}
+
+func TestScrubCookiesOptimized(t *testing.T) {
+	scrubber := NewDefaultCookieScrubber()
+
+	// No tracking cookies -> should return the exact same slice
+	noTracking := []string{"session=123", "user=john; theme=dark"}
+	res1 := scrubber.ScrubCookies(noTracking)
+	if len(res1) != len(noTracking) || &res1[0] != &noTracking[0] {
+		t.Errorf("expected no allocation or copying for no tracking cookies, got new slice pointer")
+	}
+
+	// Tracking cookies present -> should scrub and return new slice
+	withTracking := []string{"session=123", "_ga=12345; user=john", "_hj=abc"}
+	res2 := scrubber.ScrubCookies(withTracking)
+	if len(res2) != 2 {
+		t.Errorf("expected 2 cookies after scrubbing, got %d", len(res2))
+	}
+	if res2[0] != "session=123" || res2[1] != "user=john" {
+		t.Errorf("unexpected scrubbed cookies: %v", res2)
+	}
+}

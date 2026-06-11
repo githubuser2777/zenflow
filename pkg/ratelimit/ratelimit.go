@@ -2,18 +2,17 @@ package ratelimit
 
 import (
 	"errors"
-	"net"
-	"net/http"
-	"net/netip"
-	"strings"
 	"sync"
 	"time"
+
+	"zenflow/pkg/netutil"
 )
 
 var ErrTooManyRequests = errors.New("too many requests")
 
+// Limiter defines the rate limiter interface.
 type Limiter interface {
-	CheckRateLimit(r *http.Request) error
+	CheckRateLimit(key string) error
 }
 
 type bucket struct {
@@ -23,94 +22,70 @@ type bucket struct {
 	lastSeen   time.Time
 }
 
+type limiterShard struct {
+	mu      sync.RWMutex
+	buckets map[string]*bucket
+}
+
 type TokenBucketLimiter struct {
 	rate      int
 	burst     int
-	buckets   sync.Map
+	shards    [32]*limiterShard
 	stopClean chan struct{}
 }
 
+// NewLimiter creates a new sharded token bucket rate limiter.
 func NewLimiter(rate, burst int) *TokenBucketLimiter {
 	l := &TokenBucketLimiter{
 		rate:      rate,
 		burst:     burst,
 		stopClean: make(chan struct{}),
 	}
+	for i := 0; i < 32; i++ {
+		l.shards[i] = &limiterShard{
+			buckets: make(map[string]*bucket),
+		}
+	}
 	go l.cleanup()
 	return l
 }
 
-func extractRawIP(r *http.Request) string {
-	ipStr := r.Header.Get("X-Forwarded-For")
-	if ipStr == "" {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			return r.RemoteAddr
-		}
-		return host
+func getShardIndex(key string) uint32 {
+	var hash uint32 = 2166136261
+	for i := 0; i < len(key); i++ {
+		hash ^= uint32(key[i])
+		hash *= 16777619
 	}
-
-	if firstIP, _, ok := strings.Cut(ipStr, ","); ok {
-		return strings.TrimSpace(firstIP)
-	}
-	return strings.TrimSpace(ipStr)
+	return hash % 32
 }
 
 func canonicalizeIP(rawIP string) string {
-	ipStrClean := rawIP
-	isBracketed := false
-	if strings.HasPrefix(ipStrClean, "[") && strings.HasSuffix(ipStrClean, "]") {
-		ipStrClean = ipStrClean[1 : len(ipStrClean)-1]
-		isBracketed = true
-	}
-
-	addr, err := netip.ParseAddr(ipStrClean)
-	if err != nil {
-		return rawIP
-	}
-
-	if addr.IsLoopback() && addr.Is6() {
-		return "127.0.0.1"
-	}
-	
-	if addr.Is4() {
-		// netip.ParseAddr only accepts strictly formatted IPv4 (no leading zeros, etc).
-		// Thus ipStrClean is already canonical.
-		return ipStrClean
-	}
-
-	if addr.Is4In6() {
-		return addr.Unmap().String()
-	}
-
-	// For standard IPv6, we want to ensure it has brackets.
-	// If the original already had brackets and was canonical, we can reuse it.
-	canonical6 := addr.String()
-	if isBracketed && ipStrClean == canonical6 {
-		return rawIP
-	}
-
-	return "[" + canonical6 + "]"
+	return netutil.CanonicalizeIP(rawIP)
 }
 
-func extractIP(r *http.Request) string {
-	return canonicalizeIP(extractRawIP(r))
-}
-
-func (l *TokenBucketLimiter) CheckRateLimit(r *http.Request) error {
-	host := extractIP(r)
+// CheckRateLimit checks the rate limit for the given key (e.g. client IP).
+func (l *TokenBucketLimiter) CheckRateLimit(key string) error {
+	shardIdx := getShardIndex(key)
+	shard := l.shards[shardIdx]
 
 	now := time.Now()
-	var b *bucket
-	if val, ok := l.buckets.Load(host); ok {
-		b = val.(*bucket)
-	} else {
-		val, _ = l.buckets.LoadOrStore(host, &bucket{
-			tokens:     float64(l.burst),
-			lastRefill: now,
-			lastSeen:   now,
-		})
-		b = val.(*bucket)
+
+	shard.mu.RLock()
+	b, ok := shard.buckets[key]
+	shard.mu.RUnlock()
+
+	if !ok {
+		shard.mu.Lock()
+		b, ok = shard.buckets[key]
+		if !ok {
+			b = &bucket{
+				tokens:     float64(l.burst),
+				lastRefill: now,
+				lastSeen:   now,
+			}
+			shard.buckets[key] = b
+		}
+		shard.mu.Unlock()
 	}
 
 	b.mu.Lock()
@@ -146,23 +121,26 @@ func (l *TokenBucketLimiter) cleanup() {
 		select {
 		case <-ticker.C:
 			now := time.Now()
-			l.buckets.Range(func(key, value any) bool {
-				b := value.(*bucket)
-				b.mu.Lock()
-				lastSeen := b.lastSeen
-				b.mu.Unlock()
+			for _, s := range l.shards {
+				s.mu.Lock()
+				for key, b := range s.buckets {
+					b.mu.Lock()
+					lastSeen := b.lastSeen
+					b.mu.Unlock()
 
-				if now.Sub(lastSeen) > 5*time.Minute {
-					l.buckets.Delete(key)
+					if now.Sub(lastSeen) > 5*time.Minute {
+						delete(s.buckets, key)
+					}
 				}
-				return true
-			})
+				s.mu.Unlock()
+			}
 		case <-l.stopClean:
 			return
 		}
 	}
 }
 
+// Stop stops the background cleanup goroutine.
 func (l *TokenBucketLimiter) Stop() {
 	close(l.stopClean)
 }

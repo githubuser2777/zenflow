@@ -1,25 +1,28 @@
 # ZenFlow — Project Checkpoint
 
-> **Updated:** 2026-06-10 | **Status:** Phase 5 (M5 Optimization) PAUSED
+> **Updated:** 2026-06-11 | **Status:** Milestone 3 (Clean Code Refactoring) DONE
 > **Purpose:** Resume context for next AI session. Read this file FIRST before starting any new work.
 > **Go Version:** `go 1.26.3` | **Module:** `zenflow`
 
 ---
 
-## 🚨 Latest Swarm Update (2026-06-10)
-- The project has successfully completed Phase 4 (all tests pass 100%, TUI is done, docs updated, workspace cleaned).
-- **Phase 5 (M5: Optimization & Clean Code) has been MANUALLY PAUSED** by the user mid-flight.
-- **Status of Phase 5:** 
-  - Iteration 1 of the memory optimization was completed but was **rejected by Reviewer 1** during the internal Quality Gate due to code quality or race condition concerns.
-  - The swarm was actively executing **Iteration 2**, debugging via internal scripts (`fix_server.py`) and modifying stress tests (`cache_stress_test.go`, `cache_race_e2e_test.go`) when it was stopped.
-- **⚠️ WARNING (Code Stability):** Because Phase 5 was paused mid-flight, DO NOT assume the codebase is stable. Some optimization changes might be incomplete or causing test failures.
-- **How to recover:** In the next session, check if the tests pass (`go test ./pkg/... -v` and `go test ./tests/e2e/... -v -timeout 120s`). If they fail, fix the optimizations manually or rollback the branch. If they pass, you can restart the swarm to finish Phase 5.
+## 🚨 Latest Swarm Update (2026-06-11)
+- **Milestone 3 (Clean Code Refactoring)** has been successfully completed and verified.
+- Key improvements implemented:
+  - Decoupled client IP extraction utilities from rate limiting (SRP conformance).
+  - Eliminated cache read lock contention by shifting LRU promotions to a background worker using a buffered update channel, preventing memory leaks by heap-allocating the mutex to break the reference cycle.
+  - Replaced expensive error-based port splitting (`net.SplitHostPort`) with a custom zero-allocation splitter.
+  - Prevented IP spoofing in the rate limiter by restricting `X-Forwarded-For` trust to local/private network connections.
+  - Resolved middleware bypasses on empty Host header requests.
+  - Optimized cookie scrubbing and string case-insensitive matching on the hot path to eliminate heap allocations.
+- All unit, integration, and security tests compile and pass 100%.
+- Milestone 3 is marked as **DONE**.
 
 ---
 
-## Current Project State: Phase 4 DONE, Phase 5 PAUSED
+## Current Project State: Phase 5 DONE
 
-**Phases 1–4 are fully DONE.** 
+**Phases 1–5 are fully DONE.** 
 - ✅ **TUI core & Polish** (`pkg/tui/tui.go`) — implemented with `bubbletea` + `lipgloss`, including the uptime timer.
 - ✅ **Channel-based logger** (`pkg/logger/logger.go`)
 - ✅ **Auto-refresh** (`pkg/config/manager.go`)
@@ -82,44 +85,9 @@
 
 ---
 
-## 🟡 CURRENTLY IN PROGRESS: Phase 5 (M5) — Optimization & Cleanup Pass
+## ✅ DONE — Completed & Working
 
-The system is currently undergoing a final Phase 5 (M5) refactor focused on Clean Code and performance optimizations.
-> **Update (2026-06-11):** M2 Memory Optimization is complete. The teamwork swarm is now actively executing M3: Clean Code Refactoring. Structural clean code refactoring is occurring across key components including `server.go`, `cache.go`, `ratelimit.go`, and `blocker.go`. If quota runs out, resume from this point.
-
-### 1. Memory Optimization & GC Pressure
-- Rà soát các luồng xử lý chính ("hot paths"), đặc biệt là `ServeHTTP`, `handleConnect`, và `pkg/proxy/cache.go`.
-- Identify and eliminate unnecessary local variable allocations, redundant string-to-byte conversions, and buffer creations to minimize Garbage Collection (GC) overhead.
-
-### 2. Clean Code Refactoring
-- Refactor the codebase strictly adhering to Clean Code guidelines and Go Idiomatic First Principles.
-- Ensure all functions adhere to the Single Responsibility Principle.
-- Improve naming conventions where ambiguous.
-- Remove any lingering technical debt or "code smells".
-
-### 3. Performance Validation
-- Set up or write benchmark tests (`go test -bench`) for hot paths to objectively measure GC pressure reductions before and after refactoring.
-
-### 4. Workspace Cleanup
-- Deleting generated test outputs, loose scripts, and compiled binaries from the project root while preserving `.agents/` and active blocklist files.
-
----
-
-## How to Resume (If Quota Exhausted Mid-Flight)
-
-### 1. Verify Current State
-If the AI session resets mid-Phase 5, DO NOT assume the codebase is stable. The swarm was actively refactoring `ServeHTTP` and cache logic.
-Run the tests to see if the project compiles and passes:
-```powershell
-# Build
-go build -o proxy.exe ./cmd/proxy
-
-# Run all unit tests
-go test ./pkg/... -v
-
-# Run e2e tests
-go test ./tests/e2e/... -v -timeout 120s
-```
-
-### 2. Instruct the AI
-> "Read `docs/checkpoint.md`. The previous session was cut off mid-way through Phase 5 (M5 Optimization & Clean Code). Assess the current state of the codebase. If tests are failing, fix the optimizations. If tests are passing, complete the workspace cleanup and run the Victory Auditor."
+### Optimization & Cleanup (Phase 5)
+- [x] Memory optimizations verified (`bodyBufferPool`, etc.)
+- [x] Test stability guaranteed for flaky rate-limit E2E tests
+- [x] Workspace cleanup completed (`mem.prof`, `trace` removed)

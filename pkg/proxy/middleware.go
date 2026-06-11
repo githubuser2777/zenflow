@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"net"
 	"net/http"
 
 	"zenflow/pkg/auth"
 	"zenflow/pkg/filter"
 	"zenflow/pkg/logger"
+	"zenflow/pkg/netutil"
 	"zenflow/pkg/ratelimit"
 )
 
@@ -21,7 +23,8 @@ func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
 func RateLimitMiddleware(limiter ratelimit.Limiter, rateLimitStr string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if err := limiter.CheckRateLimit(r); err != nil {
+			ip := netutil.ExtractIP(r)
+			if err := limiter.CheckRateLimit(ip); err != nil {
 				http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 				return
 			}
@@ -49,21 +52,30 @@ func AuthMiddleware(authenticator auth.Authenticator) Middleware {
 func BlockerMiddleware(domainBlocker, malwareBlocker *filter.Blocker) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			host := r.Host
+			if host == "" {
+				h, _, err := net.SplitHostPort(r.URL.Host)
+				if err != nil {
+					host = r.URL.Host
+				} else {
+					host = h
+				}
+			}
 			if domainBlocker != nil {
-				if blocked, reason := domainBlocker.IsBlocked(r.Host); blocked {
-					logger.LogBlock(r.Method, r.Host, r.URL.String(), reason)
+				if blocked, reason := domainBlocker.IsBlocked(host); blocked {
+					logger.LogBlock(r.Method, host, r.URL.String(), reason)
 					http.Error(w, "Blocked by proxy filter", http.StatusForbidden)
 					return
 				}
 			}
 			if malwareBlocker != nil {
-				if blocked, reason := malwareBlocker.IsBlocked(r.Host); blocked {
-					logger.LogBlock(r.Method, r.Host, r.URL.String(), "Malware: "+reason)
+				if blocked, reason := malwareBlocker.IsBlocked(host); blocked {
+					logger.LogBlock(r.Method, host, r.URL.String(), "Malware: "+reason)
 					http.Error(w, "Blocked by malware filter", http.StatusForbidden)
 					return
 				}
 			}
-			logger.LogAllow(r.Method, r.Host, r.URL.String())
+			logger.LogAllow(r.Method, host, r.URL.String())
 			next.ServeHTTP(w, r)
 		})
 	}

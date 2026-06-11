@@ -70,7 +70,7 @@ func TestTier2_RateLimit_UnroutableDestination(t *testing.T) {
 	defer cleanup()
 
 	client := NewProxyClient(proxyURL)
-	resp1, _ := client.Get("http://invalid.destination.test.local:9999")
+	resp1, _ := client.Get("http://127.0.0.1:41234")
 	if resp1 != nil {
 		resp1.Body.Close()
 	}

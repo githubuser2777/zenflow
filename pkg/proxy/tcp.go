@@ -33,7 +33,7 @@ func hijackConnection(w http.ResponseWriter) (net.Conn, *bufio.ReadWriter, error
 	return hijacker.Hijack()
 }
 
-func handleConnect(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	host, err := resolveConnectHost(r.Host)
 	if err != nil {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
@@ -65,16 +65,16 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 		targetConn.Write(peeked)
 	}
 
-	go transfer(targetConn, clientConn)
-	go transfer(clientConn, targetConn)
+	go s.transfer(targetConn, clientConn)
+	go s.transfer(clientConn, targetConn)
 }
 
-func transfer(destination io.WriteCloser, source io.ReadCloser) {
+func (s *Server) transfer(destination io.WriteCloser, source io.ReadCloser) {
 	defer destination.Close()
 	defer source.Close()
 
-	bufPtr := bufferPool.Get().(*[]byte)
-	defer bufferPool.Put(bufPtr)
+	bufPtr := s.bufferPool.Get().(*[]byte)
+	defer s.bufferPool.Put(bufPtr)
 
 	io.CopyBuffer(destination, source, *bufPtr)
 }

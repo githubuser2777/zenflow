@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 )
@@ -34,13 +35,34 @@ type cacheEntry struct {
 	size int64 // estimateItemSize — used for totalSize accounting
 }
 
+type cacheWorker struct {
+	updateChan chan *list.Element
+	mu         *sync.RWMutex
+	store      map[cacheKey]*list.Element
+	ll         *list.List
+}
+
+func (w *cacheWorker) run() {
+	for elem := range w.updateChan {
+		w.mu.Lock()
+		entry, ok := elem.Value.(*cacheEntry)
+		if ok {
+			if currentElem, ok := w.store[entry.key]; ok && currentElem == elem {
+				w.ll.MoveToFront(elem)
+			}
+		}
+		w.mu.Unlock()
+	}
+}
+
 // Cache is a memory-bounded LRU cache.
 type Cache struct {
-	mu           sync.RWMutex
+	mu           *sync.RWMutex
 	store        map[cacheKey]*list.Element
 	ll           *list.List
 	totalSize    int64
 	maxTotalSize int64
+	updateChan   chan *list.Element
 }
 
 const defaultMaxTotalSize = 100 * 1024 * 1024 // 100MB
@@ -59,20 +81,43 @@ func NewCache() *Cache {
 
 // NewCacheWithLimit creates a new Cache with the specified total size limit in bytes.
 func NewCacheWithLimit(maxBytes int64) *Cache {
-	return &Cache{
+	c := &Cache{
+		mu:           new(sync.RWMutex),
 		store:        make(map[cacheKey]*list.Element),
 		ll:           list.New(),
 		maxTotalSize: maxBytes,
+		updateChan:   make(chan *list.Element, 4096),
 	}
+	w := &cacheWorker{
+		updateChan: c.updateChan,
+		mu:         c.mu,
+		store:      c.store,
+		ll:         c.ll,
+	}
+	go w.run()
+	runtime.SetFinalizer(c, func(obj *Cache) {
+		close(obj.updateChan)
+	})
+	return c
 }
 
+// Get retrieves a response from the cache.
 func (c *Cache) Get(key cacheKey) (CachedResponse, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	elem, ok := c.store[key]
+	var resp CachedResponse
+	if ok {
+		resp = elem.Value.(*cacheEntry).resp
+	}
+	c.mu.RUnlock()
 
-	if elem, ok := c.store[key]; ok {
-		c.ll.MoveToFront(elem)
-		return elem.Value.(*cacheEntry).resp, true
+	if ok {
+		select {
+		case c.updateChan <- elem:
+		default:
+			// If buffer is full, drop update to prevent blocking.
+		}
+		return resp, true
 	}
 	return CachedResponse{}, false
 }
@@ -116,6 +161,20 @@ func (c *Cache) Set(key cacheKey, headers http.Header, body []byte) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Drain updateChan to ensure LRU order is fully up-to-date before eviction
+	for len(c.updateChan) > 0 {
+		select {
+		case elem := <-c.updateChan:
+			entry, ok := elem.Value.(*cacheEntry)
+			if ok {
+				if currentElem, ok := c.store[entry.key]; ok && currentElem == elem {
+					c.ll.MoveToFront(elem)
+				}
+			}
+		default:
+		}
+	}
 
 	// If key already exists, remove old entry
 	if elem, ok := c.store[key]; ok {

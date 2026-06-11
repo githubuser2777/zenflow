@@ -31,7 +31,7 @@ func TestPoolDiscardingLargeBuffers(t *testing.T) {
 	}
 	runtime.ReadMemStats(&m2)
 
-	buf := bodyBufferPool.Get().(*bytes.Buffer)
+	buf := server.bodyBufferPool.Get().(*bytes.Buffer)
 	fmt.Printf("Buffer capacity after Get: %d\n", buf.Cap())
 	fmt.Printf("Allocations: %d\n", m2.Mallocs-m1.Mallocs)
 

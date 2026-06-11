@@ -16,33 +16,174 @@ import (
 	"zenflow/pkg/ratelimit"
 )
 
+// StaticAssetMatcher determines if a request is for a static asset.
+type StaticAssetMatcher interface {
+	IsStaticAsset(r *http.Request) bool
+}
+
+// DefaultStaticAssetMatcher is the default implementation of StaticAssetMatcher.
+type DefaultStaticAssetMatcher struct {
+	extensions map[string]bool
+}
+
+// NewDefaultStaticAssetMatcher creates a new DefaultStaticAssetMatcher.
+func NewDefaultStaticAssetMatcher() *DefaultStaticAssetMatcher {
+	exts := []string{".png", ".jpg", ".jpeg", ".gif", ".css", ".js", ".ico"}
+	m := &DefaultStaticAssetMatcher{
+		extensions: make(map[string]bool),
+	}
+	for _, ext := range exts {
+		m.extensions[ext] = true
+	}
+	return m
+}
+
+func (m *DefaultStaticAssetMatcher) IsStaticAsset(r *http.Request) bool {
+	path := r.URL.Path
+	idx := strings.LastIndexByte(path, '.')
+	if idx < 0 {
+		return false
+	}
+	ext := strings.ToLower(path[idx:])
+	return m.extensions[ext]
+}
+
+// CookieScrubber scrubs tracking cookies from a request's cookies.
+type CookieScrubber interface {
+	ScrubCookies(cookies []string) []string
+}
+
+// DefaultCookieScrubber is the default implementation of CookieScrubber.
+type DefaultCookieScrubber struct {
+	trackingCookies []string
+}
+
+// NewDefaultCookieScrubber creates a new DefaultCookieScrubber.
+func NewDefaultCookieScrubber() *DefaultCookieScrubber {
+	return &DefaultCookieScrubber{
+		trackingCookies: []string{"_ga", "_gid", "_fbp", "_hj"},
+	}
+}
+
+func (s *DefaultCookieScrubber) isTrackingCookie(name string) bool {
+	for _, tc := range s.trackingCookies {
+		if strings.HasPrefix(name, tc) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *DefaultCookieScrubber) hasTrackingCookie(cookieStr string) bool {
+	remaining := cookieStr
+	for len(remaining) > 0 {
+		var part string
+		part, remaining, _ = strings.Cut(remaining, ";")
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		name, _, _ := strings.Cut(trimmed, "=")
+		name = strings.TrimSpace(name)
+		if s.isTrackingCookie(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *DefaultCookieScrubber) ScrubCookies(cookies []string) []string {
+	hasTracking := false
+	for _, cookieStr := range cookies {
+		if s.hasTrackingCookie(cookieStr) {
+			hasTracking = true
+			break
+		}
+	}
+	if !hasTracking {
+		return cookies
+	}
+
+	var newCookies []string
+	for _, cookieStr := range cookies {
+		if !s.hasTrackingCookie(cookieStr) {
+			newCookies = append(newCookies, cookieStr)
+			continue
+		}
+
+		var builder strings.Builder
+		first := true
+		remaining := cookieStr
+		for len(remaining) > 0 {
+			var part string
+			part, remaining, _ = strings.Cut(remaining, ";")
+			trimmed := strings.TrimSpace(part)
+			if trimmed == "" {
+				continue
+			}
+
+			name, _, _ := strings.Cut(trimmed, "=")
+			name = strings.TrimSpace(name)
+
+			if !s.isTrackingCookie(name) {
+				if !first {
+					builder.WriteString("; ")
+				}
+				builder.WriteString(trimmed)
+				first = false
+			}
+		}
+
+		if builder.Len() > 0 {
+			newCookies = append(newCookies, builder.String())
+		}
+	}
+	return newCookies
+}
+
 var (
-	bufferPool = sync.Pool{
+	defaultAssetMatcher = NewDefaultStaticAssetMatcher()
+	defaultScrubber     = NewDefaultCookieScrubber()
+)
+
+func isStaticAsset(r *http.Request) bool {
+	return defaultAssetMatcher.IsStaticAsset(r)
+}
+
+func scrubCookies(cookies []string) []string {
+	return defaultScrubber.ScrubCookies(cookies)
+}
+
+// Server represents the core HTTP Proxy logic without middlewares.
+type Server struct {
+	cache          *Cache
+	proxy          *httputil.ReverseProxy
+	privacy        bool
+	bufferPool     sync.Pool
+	bodyBufferPool sync.Pool
+	assetMatcher   StaticAssetMatcher
+	cookieScrubber CookieScrubber
+}
+
+// NewCoreServer creates the un-wrapped Server for tests or manual composition.
+// It initializes instance-specific sync.Pools.
+func NewCoreServer(privacy bool) *Server {
+	s := &Server{
+		cache:          NewCache(),
+		privacy:        privacy,
+		assetMatcher:   defaultAssetMatcher,
+		cookieScrubber: defaultScrubber,
+	}
+	s.bufferPool = sync.Pool{
 		New: func() interface{} {
 			buf := make([]byte, 32*1024)
 			return &buf
 		},
 	}
-
-	bodyBufferPool = sync.Pool{
+	s.bodyBufferPool = sync.Pool{
 		New: func() interface{} {
 			return bytes.NewBuffer(make([]byte, 0, 32*1024))
 		},
-	}
-)
-
-// Server represents the core HTTP Proxy logic without middlewares.
-type Server struct {
-	cache   *Cache
-	proxy   *httputil.ReverseProxy
-	privacy bool
-}
-
-// NewCoreServer creates the un-wrapped Server for tests or manual composition.
-func NewCoreServer(privacy bool) *Server {
-	s := &Server{
-		cache:   NewCache(),
-		privacy: privacy,
 	}
 	s.proxy = &httputil.ReverseProxy{
 		Director:       s.rewriteRequest,
@@ -88,7 +229,7 @@ func (s *Server) rewriteRequest(r *http.Request) {
 	}
 
 	if cookies, ok := r.Header["Cookie"]; ok {
-		newCookies := scrubCookies(cookies)
+		newCookies := s.cookieScrubber.ScrubCookies(cookies)
 		if len(newCookies) > 0 {
 			r.Header["Cookie"] = newCookies
 		} else {
@@ -98,8 +239,8 @@ func (s *Server) rewriteRequest(r *http.Request) {
 }
 
 func (s *Server) interceptResponse(resp *http.Response) error {
-	isStatic := isStaticAsset(resp.Request)
-	if shouldCache(resp, isStatic) {
+	isStatic := s.assetMatcher.IsStaticAsset(resp.Request)
+	if s.shouldCache(resp, isStatic) {
 		return s.cacheResponse(resp)
 	}
 	return nil
@@ -110,97 +251,11 @@ func (s *Server) handleProxyError(w http.ResponseWriter, r *http.Request, err er
 	http.Error(w, "Proxy Error: Bad Gateway", http.StatusBadGateway)
 }
 
-func isStaticAsset(r *http.Request) bool {
-	path := r.URL.Path
-	idx := strings.LastIndexByte(path, '.')
-	if idx < 0 {
-		return false
-	}
-	ext := path[idx:]
-	if strings.EqualFold(ext, ".png") ||
-		strings.EqualFold(ext, ".jpg") ||
-		strings.EqualFold(ext, ".jpeg") ||
-		strings.EqualFold(ext, ".gif") ||
-		strings.EqualFold(ext, ".css") ||
-		strings.EqualFold(ext, ".js") ||
-		strings.EqualFold(ext, ".ico") {
-		return true
-	}
-	return false
-}
-
-var trackingCookies = []string{"_ga", "_gid", "_fbp", "_hj"}
-
-func isTrackingCookie(name string) bool {
-	for _, tc := range trackingCookies {
-		if strings.HasPrefix(name, tc) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasTrackingCookie(cookieStr string) bool {
-	remaining := cookieStr
-	for len(remaining) > 0 {
-		var part string
-		part, remaining, _ = strings.Cut(remaining, ";")
-		trimmed := strings.TrimSpace(part)
-		if trimmed == "" {
-			continue
-		}
-		name, _, _ := strings.Cut(trimmed, "=")
-		name = strings.TrimSpace(name)
-		if isTrackingCookie(name) {
-			return true
-		}
-	}
-	return false
-}
-
-func scrubCookies(cookies []string) []string {
-	var newCookies []string
-	for _, cookieStr := range cookies {
-		if !hasTrackingCookie(cookieStr) {
-			newCookies = append(newCookies, cookieStr)
-			continue
-		}
-
-		var builder strings.Builder
-		first := true
-		remaining := cookieStr
-		for len(remaining) > 0 {
-			var part string
-			part, remaining, _ = strings.Cut(remaining, ";")
-			trimmed := strings.TrimSpace(part)
-			if trimmed == "" {
-				continue
-			}
-
-			name, _, _ := strings.Cut(trimmed, "=")
-			name = strings.TrimSpace(name)
-
-			if !isTrackingCookie(name) {
-				if !first {
-					builder.WriteString("; ")
-				}
-				builder.WriteString(trimmed)
-				first = false
-			}
-		}
-
-		if builder.Len() > 0 {
-			newCookies = append(newCookies, builder.String())
-		}
-	}
-	return newCookies
-}
-
 func containsIgnoreCase(s, substr string) bool {
 	if len(substr) == 0 {
 		return true
 	}
-	if len(substr) > len(s) {
+	if len(s) < len(substr) {
 		return false
 	}
 	for i := 0; i <= len(s)-len(substr); i++ {
@@ -208,15 +263,17 @@ func containsIgnoreCase(s, substr string) bool {
 		for j := 0; j < len(substr); j++ {
 			c1 := s[i+j]
 			c2 := substr[j]
-			if c1 >= 'A' && c1 <= 'Z' {
-				c1 += 'a' - 'A'
-			}
-			if c2 >= 'A' && c2 <= 'Z' {
-				c2 += 'a' - 'A'
-			}
 			if c1 != c2 {
-				match = false
-				break
+				if c1 >= 'A' && c1 <= 'Z' {
+					c1 = c1 + ('a' - 'A')
+				}
+				if c2 >= 'A' && c2 <= 'Z' {
+					c2 = c2 + ('a' - 'A')
+				}
+				if c1 != c2 {
+					match = false
+					break
+				}
 			}
 		}
 		if match {
@@ -226,7 +283,7 @@ func containsIgnoreCase(s, substr string) bool {
 	return false
 }
 
-func shouldCache(resp *http.Response, isStatic bool) bool {
+func (s *Server) shouldCache(resp *http.Response, isStatic bool) bool {
 	if !isStatic || resp.Request.Method != http.MethodGet || resp.StatusCode != http.StatusOK {
 		return false
 	}
@@ -243,12 +300,12 @@ func getCacheKey(r *http.Request) cacheKey {
 	return cacheKey{host: r.Host, path: r.URL.Path, query: r.URL.RawQuery}
 }
 
-func readBodyBytes(resp *http.Response) ([]byte, error) {
-	buf := bodyBufferPool.Get().(*bytes.Buffer)
+func (s *Server) readBodyBytes(resp *http.Response) ([]byte, error) {
+	buf := s.bodyBufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer func() {
 		if buf.Cap() <= 2*maxCacheSize {
-			bodyBufferPool.Put(buf)
+			s.bodyBufferPool.Put(buf)
 		}
 	}()
 
@@ -271,7 +328,7 @@ func (s *Server) cacheResponse(resp *http.Response) error {
 		return nil
 	}
 
-	bodyBytes, err := readBodyBytes(resp)
+	bodyBytes, err := s.readBodyBytes(resp)
 	if err != nil {
 		return err
 	}
@@ -317,11 +374,11 @@ func (s *Server) serveFromCache(w http.ResponseWriter, r *http.Request) bool {
 // ServeHTTP handles the incoming HTTP requests.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
-		handleConnect(w, r)
+		s.handleConnect(w, r)
 		return
 	}
 
-	if isStaticAsset(r) && s.serveFromCache(w, r) {
+	if s.assetMatcher.IsStaticAsset(r) && s.serveFromCache(w, r) {
 		return
 	}
 

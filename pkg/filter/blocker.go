@@ -1,68 +1,61 @@
 package filter
 
 import (
-	"net"
 	"strings"
-	"sync"
+	"sync/atomic"
 )
+
+// Filter is the interface for domain blockers.
+type Filter interface {
+	IsBlocked(host string) (bool, string)
+	UpdateBlocklist(domains []string)
+}
 
 // Blocker is responsible for filtering out domains.
 type Blocker struct {
-	blockedDomains map[string]bool
-	mu             sync.RWMutex
+	blockedDomains atomic.Value // stores map[string]bool
 }
 
 func normalizeDomain(d string) string {
 	d = strings.TrimSuffix(d, ".")
 	d = strings.Trim(d, "[]")
-
-	hasUpper := false
-	for i := 0; i < len(d); i++ {
-		if d[i] >= 'A' && d[i] <= 'Z' {
-			hasUpper = true
-			break
-		}
-	}
-	if !hasUpper {
-		return d
-	}
-
-	b := make([]byte, len(d))
-	for i := 0; i < len(d); i++ {
-		c := d[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		b[i] = c
-	}
-	return string(b)
+	return strings.ToLower(d)
 }
 
 // NewBlocker creates a new Blocker with an initial list of blocked domains.
 func NewBlocker(initialDomains []string) *Blocker {
-	b := &Blocker{
-		blockedDomains: make(map[string]bool),
-	}
+	b := &Blocker{}
+	m := make(map[string]bool)
 	for _, domain := range initialDomains {
-		b.blockedDomains[normalizeDomain(domain)] = true
+		m[normalizeDomain(domain)] = true
 	}
+	b.blockedDomains.Store(m)
 	return b
+}
+
+func splitHost(host string) string {
+	if idx := strings.LastIndexByte(host, ':'); idx != -1 {
+		// Ensure it's not a raw IPv6 address like [::1]
+		if !strings.HasSuffix(host, "]") {
+			return host[:idx]
+		}
+	}
+	return host
 }
 
 // IsBlocked checks if a given host is in the block list.
 func (b *Blocker) IsBlocked(host string) (bool, string) {
-	hostOnly, _, err := net.SplitHostPort(host)
-	if err != nil {
-		hostOnly = host
-	}
+	hostOnly := splitHost(host)
 	hostOnly = normalizeDomain(hostOnly)
 
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	m, _ := b.blockedDomains.Load().(map[string]bool)
+	if m == nil {
+		return false, ""
+	}
 
 	domain := hostOnly
 	for {
-		if b.blockedDomains[domain] {
+		if m[domain] {
 			return true, domain
 		}
 		idx := strings.IndexByte(domain, '.')
@@ -81,8 +74,5 @@ func (b *Blocker) UpdateBlocklist(domains []string) {
 	for _, domain := range domains {
 		newBlocked[normalizeDomain(domain)] = true
 	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.blockedDomains = newBlocked
+	b.blockedDomains.Store(newBlocked)
 }

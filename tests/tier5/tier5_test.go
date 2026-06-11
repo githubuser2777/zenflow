@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"zenflow/pkg/auth"
+	"zenflow/pkg/netutil"
 	"zenflow/pkg/ratelimit"
 )
 
@@ -77,7 +78,7 @@ func TestRateLimit_LoadBalancerExhaustion(t *testing.T) {
 	req1.RemoteAddr = "10.0.0.1:1234" // LB IP
 	req1.Header.Set("X-Forwarded-For", "192.168.1.100")
 
-	if err := limiter.CheckRateLimit(req1); err != nil {
+	if err := limiter.CheckRateLimit(netutil.ExtractIP(req1)); err != nil {
 		t.Fatalf("Client A request failed: %v", err)
 	}
 
@@ -86,7 +87,7 @@ func TestRateLimit_LoadBalancerExhaustion(t *testing.T) {
 	req2.RemoteAddr = "10.0.0.1:5678" // LB IP
 	req2.Header.Set("X-Forwarded-For", "192.168.1.200")
 
-	err := limiter.CheckRateLimit(req2)
+	err := limiter.CheckRateLimit(netutil.ExtractIP(req2))
 	if err != nil {
 		t.Fatalf("Expected success for Client B (different X-Forwarded-For), got: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestRateLimit_IPv6Bypass(t *testing.T) {
 	req1 := httptest.NewRequest("GET", "http://example.com", nil)
 	req1.RemoteAddr = "127.0.0.1:1234"
 
-	if err := limiter.CheckRateLimit(req1); err != nil {
+	if err := limiter.CheckRateLimit(netutil.ExtractIP(req1)); err != nil {
 		t.Fatalf("IPv4 request failed: %v", err)
 	}
 
@@ -111,7 +112,7 @@ func TestRateLimit_IPv6Bypass(t *testing.T) {
 	req2 := httptest.NewRequest("GET", "http://example.com", nil)
 	req2.RemoteAddr = "[::1]:5678"
 
-	err := limiter.CheckRateLimit(req2)
+	err := limiter.CheckRateLimit(netutil.ExtractIP(req2))
 	if err == nil {
 		t.Fatalf("Expected IPv6 bypass to FAIL, but it succeeded!")
 	} else if err != ratelimit.ErrTooManyRequests {
@@ -131,7 +132,7 @@ func TestRateLimit_FractionalTokenDiscard(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:1234"
 
 	// Exhaust token
-	if err := limiter.CheckRateLimit(req); err != nil {
+	if err := limiter.CheckRateLimit(netutil.ExtractIP(req)); err != nil {
 		t.Fatalf("Initial request failed: %v", err)
 	}
 
@@ -139,7 +140,7 @@ func TestRateLimit_FractionalTokenDiscard(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 
 	// Consume token
-	if err := limiter.CheckRateLimit(req); err != nil {
+	if err := limiter.CheckRateLimit(netutil.ExtractIP(req)); err != nil {
 		t.Fatalf("Second request failed: %v", err)
 	}
 
@@ -147,7 +148,7 @@ func TestRateLimit_FractionalTokenDiscard(t *testing.T) {
 	// If fractional tokens were kept, we would have 0.1 + 0.95 = 1.05 token now.
 	time.Sleep(950 * time.Millisecond)
 
-	err := limiter.CheckRateLimit(req)
+	err := limiter.CheckRateLimit(netutil.ExtractIP(req))
 	if err != nil {
 		t.Fatalf("Expected rate limit success (fractional tokens kept), but it failed: %v", err)
 	}
