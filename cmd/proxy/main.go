@@ -51,7 +51,7 @@ func main() {
 
 	log.Println("Starting ZenFlow HTTP Proxy...")
 
-	// 1. Initialize Ad Blocker and Config Manager
+	// Initialize Ad Blocker and Config Manager
 	var initialDomains []string
 	if strings.HasPrefix(*blocklistFlag, "http://") || strings.HasPrefix(*blocklistFlag, "https://") {
 		domains, err := config.FetchFromURL(rootCtx, *blocklistFlag)
@@ -76,7 +76,7 @@ func main() {
 	if strings.HasPrefix(*blocklistFlag, "http://") || strings.HasPrefix(*blocklistFlag, "https://") {
 		config.StartAutoRefresh(rootCtx, *blocklistFlag, blocker, 24*time.Hour, log.Default())
 	} else {
-		config.WatchLocalFile(*blocklistFlag, blocker, 5*time.Second)
+		config.WatchLocalFile(rootCtx, *blocklistFlag, blocker, 5*time.Second)
 	}
 
 	var malwareBlocker *filter.Blocker
@@ -104,14 +104,13 @@ func main() {
 		if strings.HasPrefix(*malwareBlocklistFlag, "http://") || strings.HasPrefix(*malwareBlocklistFlag, "https://") {
 			config.StartAutoRefresh(rootCtx, *malwareBlocklistFlag, malwareBlocker, 24*time.Hour, log.Default())
 		} else {
-			config.WatchLocalFile(*malwareBlocklistFlag, malwareBlocker, 5*time.Second)
+			config.WatchLocalFile(rootCtx, *malwareBlocklistFlag, malwareBlocker, 5*time.Second)
 		}
 	}
 
-	// 2. Initialize Proxy Handler
 	proxyServer := proxy.NewServer(blocker, malwareBlocker, *privacyFlag)
 
-	// 3. Configure HTTP Server with timeouts to prevent resource leaks (RULES.md)
+	// Configure HTTP Server with timeouts to prevent resource leaks (RULES.md)
 	addr := ":" + *portFlag
 	server := &http.Server{
 		Addr:         addr,
@@ -121,7 +120,7 @@ func main() {
 		IdleTimeout:  30 * time.Second,
 	}
 
-	// 4. Graceful Shutdown setup
+	// Graceful Shutdown setup
 	go func() {
 		log.Printf("Proxy listening on http://localhost%s", addr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -129,7 +128,7 @@ func main() {
 		}
 	}()
 
-	// 5. Start TUI or wait for signal
+	// Start TUI or wait for signal
 	if *noTUIFlag {
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, os.Interrupt, os.Kill)

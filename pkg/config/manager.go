@@ -73,7 +73,7 @@ func FetchFromURL(ctx context.Context, url string) ([]string, error) {
 
 // WatchLocalFile starts a goroutine that watches a local file for changes
 // using os.Stat polling and updates the blocker when it changes.
-func WatchLocalFile(filePath string, b *filter.Blocker, pollInterval time.Duration) {
+func WatchLocalFile(ctx context.Context, filePath string, b *filter.Blocker, pollInterval time.Duration) {
 	go func() {
 		var lastModTime time.Time
 
@@ -86,24 +86,30 @@ func WatchLocalFile(filePath string, b *filter.Blocker, pollInterval time.Durati
 		ticker := time.NewTicker(pollInterval)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			info, err := os.Stat(filePath)
-			if err != nil {
-				// File might have been deleted or not available, keep waiting
-				continue
-			}
-
-			if info.ModTime().After(lastModTime) {
-				log.Printf("[CONFIG] Detected change in %s, reloading blocklist...", filePath)
-				domains, err := FetchFromFile(filePath)
+		for {
+			select {
+			case <-ctx.Done():
+				log.Printf("[CONFIG] WatchLocalFile stopped for %s", filePath)
+				return
+			case <-ticker.C:
+				info, err := os.Stat(filePath)
 				if err != nil {
-					log.Printf("[CONFIG] Error reloading blocklist: %v", err)
+					// File might have been deleted or not available, keep waiting
 					continue
 				}
 
-				b.UpdateBlocklist(domains)
-				log.Printf("[CONFIG] Blocklist reloaded successfully (%d domains)", len(domains))
-				lastModTime = info.ModTime()
+				if info.ModTime().After(lastModTime) {
+					log.Printf("[CONFIG] Detected change in %s, reloading blocklist...", filePath)
+					domains, err := FetchFromFile(filePath)
+					if err != nil {
+						log.Printf("[CONFIG] Error reloading blocklist: %v", err)
+						continue
+					}
+
+					b.UpdateBlocklist(domains)
+					log.Printf("[CONFIG] Blocklist reloaded successfully (%d domains)", len(domains))
+					lastModTime = info.ModTime()
+				}
 			}
 		}
 	}()

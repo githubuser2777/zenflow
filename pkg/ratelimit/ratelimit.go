@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -57,22 +58,39 @@ func extractRawIP(r *http.Request) string {
 
 func canonicalizeIP(rawIP string) string {
 	ipStrClean := rawIP
+	isBracketed := false
 	if strings.HasPrefix(ipStrClean, "[") && strings.HasSuffix(ipStrClean, "]") {
 		ipStrClean = ipStrClean[1 : len(ipStrClean)-1]
+		isBracketed = true
 	}
 
-	ip := net.ParseIP(ipStrClean)
-	if ip == nil {
+	addr, err := netip.ParseAddr(ipStrClean)
+	if err != nil {
 		return rawIP
 	}
 
-	if ip.Equal(net.IPv6loopback) {
+	if addr.IsLoopback() && addr.Is6() {
 		return "127.0.0.1"
 	}
-	if ipv4 := ip.To4(); ipv4 != nil {
-		return ipv4.String()
+	
+	if addr.Is4() {
+		// netip.ParseAddr only accepts strictly formatted IPv4 (no leading zeros, etc).
+		// Thus ipStrClean is already canonical.
+		return ipStrClean
 	}
-	return "[" + ip.String() + "]"
+
+	if addr.Is4In6() {
+		return addr.Unmap().String()
+	}
+
+	// For standard IPv6, we want to ensure it has brackets.
+	// If the original already had brackets and was canonical, we can reuse it.
+	canonical6 := addr.String()
+	if isBracketed && ipStrClean == canonical6 {
+		return rawIP
+	}
+
+	return "[" + canonical6 + "]"
 }
 
 func extractIP(r *http.Request) string {

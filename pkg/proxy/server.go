@@ -1,23 +1,18 @@
 package proxy
 
 import (
-	"bufio"
 	"bytes"
-	"errors"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"zenflow/pkg/auth"
 	"zenflow/pkg/filter"
-	"zenflow/pkg/logger"
 	"zenflow/pkg/ratelimit"
 )
 
@@ -36,20 +31,29 @@ var (
 	}
 )
 
-// Server represents the HTTP Proxy Server.
+// Server represents the core HTTP Proxy logic without middlewares.
 type Server struct {
-	blocker        *filter.Blocker
-	malwareBlocker *filter.Blocker
-	cache          *Cache
-	auth           auth.Authenticator
-	ratelimit      ratelimit.Limiter
-	proxy          *httputil.ReverseProxy
-	privacy        bool
-	rateLimitStr   string
+	cache   *Cache
+	proxy   *httputil.ReverseProxy
+	privacy bool
 }
 
-// NewServer creates a new Server instance.
-func NewServer(domainBlocker *filter.Blocker, malwareBlocker *filter.Blocker, privacy bool) *Server {
+// NewCoreServer creates the un-wrapped Server for tests or manual composition.
+func NewCoreServer(privacy bool) *Server {
+	s := &Server{
+		cache:   NewCache(),
+		privacy: privacy,
+	}
+	s.proxy = &httputil.ReverseProxy{
+		Director:       s.rewriteRequest,
+		ModifyResponse: s.interceptResponse,
+		ErrorHandler:   s.handleProxyError,
+	}
+	return s
+}
+
+// NewServer creates a new HTTP handler that chains Middlewares around the core Server.
+func NewServer(domainBlocker *filter.Blocker, malwareBlocker *filter.Blocker, privacy bool) http.Handler {
 	rate := 50
 	limitStr := os.Getenv("PROXY_RATE_LIMIT")
 	if limitStr != "" {
@@ -59,23 +63,14 @@ func NewServer(domainBlocker *filter.Blocker, malwareBlocker *filter.Blocker, pr
 	} else {
 		limitStr = "50"
 	}
-	s := &Server{
-		blocker:        domainBlocker,
-		malwareBlocker: malwareBlocker,
-		cache:          NewCache(),
-		auth:           auth.NewAuthenticator(),
-		ratelimit:      ratelimit.NewLimiter(rate, rate),
-		privacy:        privacy,
-		rateLimitStr:   limitStr,
-	}
 
-	s.proxy = &httputil.ReverseProxy{
-		Director:       s.rewriteRequest,
-		ModifyResponse: s.interceptResponse,
-		ErrorHandler:   s.handleProxyError,
-	}
+	s := NewCoreServer(privacy)
 
-	return s
+	return Chain(s,
+		RateLimitMiddleware(ratelimit.NewLimiter(rate, rate), limitStr),
+		AuthMiddleware(auth.NewAuthenticator()),
+		BlockerMiddleware(domainBlocker, malwareBlocker),
+	)
 }
 
 func (s *Server) rewriteRequest(r *http.Request) {
@@ -121,33 +116,17 @@ func isStaticAsset(r *http.Request) bool {
 	if idx < 0 {
 		return false
 	}
-	ext := strings.ToLower(path[idx:])
-	switch ext {
-	case ".png", ".jpg", ".jpeg", ".gif", ".css", ".js", ".ico":
+	ext := path[idx:]
+	if strings.EqualFold(ext, ".png") ||
+		strings.EqualFold(ext, ".jpg") ||
+		strings.EqualFold(ext, ".jpeg") ||
+		strings.EqualFold(ext, ".gif") ||
+		strings.EqualFold(ext, ".css") ||
+		strings.EqualFold(ext, ".js") ||
+		strings.EqualFold(ext, ".ico") {
 		return true
 	}
 	return false
-}
-
-type BlockDecision struct {
-	Blocked    bool
-	Reason     string
-	FilterName string
-}
-
-func (s *Server) checkBlocking(r *http.Request) BlockDecision {
-	if s.blocker != nil {
-		if blocked, reason := s.blocker.IsBlocked(r.Host); blocked {
-			return BlockDecision{Blocked: true, Reason: reason, FilterName: "proxy filter"}
-		}
-	}
-
-	if s.malwareBlocker != nil {
-		if blocked, reason := s.malwareBlocker.IsBlocked(r.Host); blocked {
-			return BlockDecision{Blocked: true, Reason: "Malware: " + reason, FilterName: "malware filter"}
-		}
-	}
-	return BlockDecision{Blocked: false}
 }
 
 var trackingCookies = []string{"_ga", "_gid", "_fbp", "_hj"}
@@ -161,9 +140,32 @@ func isTrackingCookie(name string) bool {
 	return false
 }
 
+func hasTrackingCookie(cookieStr string) bool {
+	remaining := cookieStr
+	for len(remaining) > 0 {
+		var part string
+		part, remaining, _ = strings.Cut(remaining, ";")
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		name, _, _ := strings.Cut(trimmed, "=")
+		name = strings.TrimSpace(name)
+		if isTrackingCookie(name) {
+			return true
+		}
+	}
+	return false
+}
+
 func scrubCookies(cookies []string) []string {
 	var newCookies []string
 	for _, cookieStr := range cookies {
+		if !hasTrackingCookie(cookieStr) {
+			newCookies = append(newCookies, cookieStr)
+			continue
+		}
+
 		var builder strings.Builder
 		first := true
 		remaining := cookieStr
@@ -194,7 +196,35 @@ func scrubCookies(cookies []string) []string {
 	return newCookies
 }
 
-
+func containsIgnoreCase(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	if len(substr) > len(s) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(substr); i++ {
+		match := true
+		for j := 0; j < len(substr); j++ {
+			c1 := s[i+j]
+			c2 := substr[j]
+			if c1 >= 'A' && c1 <= 'Z' {
+				c1 += 'a' - 'A'
+			}
+			if c2 >= 'A' && c2 <= 'Z' {
+				c2 += 'a' - 'A'
+			}
+			if c1 != c2 {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
 
 func shouldCache(resp *http.Response, isStatic bool) bool {
 	if !isStatic || resp.Request.Method != http.MethodGet || resp.StatusCode != http.StatusOK {
@@ -204,23 +234,27 @@ func shouldCache(resp *http.Response, isStatic bool) bool {
 	if hasAuthHeader {
 		return false
 	}
-	cacheControl := strings.ToLower(resp.Header.Get("Cache-Control"))
-	preventCache := strings.Contains(cacheControl, "private") || strings.Contains(cacheControl, "no-cache") || strings.Contains(cacheControl, "no-store") || strings.Contains(cacheControl, "max-age=0")
+	cacheControl := resp.Header.Get("Cache-Control")
+	preventCache := containsIgnoreCase(cacheControl, "private") || containsIgnoreCase(cacheControl, "no-cache") || containsIgnoreCase(cacheControl, "no-store") || containsIgnoreCase(cacheControl, "max-age=0")
 	return !preventCache
 }
 
-func getCacheKey(r *http.Request) string {
-	return r.Host + r.URL.Path
+func getCacheKey(r *http.Request) cacheKey {
+	return cacheKey{host: r.Host, path: r.URL.Path, query: r.URL.RawQuery}
 }
 
 func readBodyBytes(resp *http.Response) ([]byte, error) {
 	buf := bodyBufferPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer func() {
-		if buf.Cap() <= 64*1024 {
+		if buf.Cap() <= 2*maxCacheSize {
 			bodyBufferPool.Put(buf)
 		}
 	}()
+
+	if resp.ContentLength > 0 && resp.ContentLength <= int64(maxCacheSize) {
+		buf.Grow(int(resp.ContentLength))
+	}
 
 	_, err := buf.ReadFrom(io.LimitReader(resp.Body, maxCacheSize+1))
 	if err != nil {
@@ -259,47 +293,18 @@ func (s *Server) cacheResponse(resp *http.Response) error {
 	return nil
 }
 
-
-
-func (s *Server) validateRequest(w http.ResponseWriter, r *http.Request) bool {
-	if err := s.ratelimit.CheckRateLimit(r); err != nil {
-		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
-		return false
-	}
-	w.Header().Set("X-RateLimit-Limit", s.rateLimitStr)
-
-	if s.auth != nil {
-		if err := s.auth.CheckAuth(r); err != nil {
-			w.Header().Set("Proxy-Authenticate", `Basic realm="Proxy"`)
-			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
-			return false
-		}
-	}
-
-	if decision := s.checkBlocking(r); decision.Blocked {
-		logger.LogBlock(r.Method, r.Host, r.URL.String(), decision.Reason)
-		http.Error(w, "Blocked by "+decision.FilterName, http.StatusForbidden)
-		return false
-	}
-
-	logger.LogAllow(r.Method, r.Host, r.URL.String())
-	return true
-}
-
 func (s *Server) serveFromCache(w http.ResponseWriter, r *http.Request) bool {
 	hasAuthHeader := r.Header.Get("Authorization") != "" || r.Header.Get("Proxy-Authorization") != ""
 	if r.Method != http.MethodGet || hasAuthHeader {
 		return false
 	}
-	if strings.Contains(strings.ToLower(r.Header.Get("Cache-Control")), "no-cache") {
+	if containsIgnoreCase(r.Header.Get("Cache-Control"), "no-cache") {
 		return false
 	}
 
 	if resp, ok := s.cache.Get(getCacheKey(r)); ok {
-		for k, vv := range resp.Headers {
-			for _, v := range vv {
-				w.Header().Add(k, v)
-			}
+		for _, field := range resp.Headers {
+			w.Header().Add(field.Key, field.Value)
 		}
 		w.Header().Set("X-Cache", "HIT")
 		w.WriteHeader(http.StatusOK)
@@ -311,12 +316,8 @@ func (s *Server) serveFromCache(w http.ResponseWriter, r *http.Request) bool {
 
 // ServeHTTP handles the incoming HTTP requests.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !s.validateRequest(w, r) {
-		return
-	}
-
 	if r.Method == http.MethodConnect {
-		s.handleConnect(w, r)
+		handleConnect(w, r)
 		return
 	}
 
@@ -325,72 +326,4 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.proxy.ServeHTTP(w, r)
-}
-
-func resolveConnectHost(host string) (string, error) {
-	_, portStr, err := net.SplitHostPort(host)
-	if err != nil {
-		if strings.Contains(err.Error(), "missing port in address") {
-			return host + ":443", nil
-		}
-		return "", err
-	}
-	if _, err := strconv.Atoi(portStr); err != nil {
-		return "", err
-	}
-	return host, nil
-}
-
-func hijackConnection(w http.ResponseWriter) (net.Conn, *bufio.ReadWriter, error) {
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		return nil, nil, errors.New("hijacking not supported")
-	}
-	return hijacker.Hijack()
-}
-
-func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
-	host, err := resolveConnectHost(r.Host)
-	if err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
-	r.Host = host
-
-	clientConn, rw, err := hijackConnection(w)
-	if err != nil {
-		if err.Error() == "hijacking not supported" {
-			http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
-		} else {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		}
-		return
-	}
-
-	targetConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
-	if err != nil {
-		io.WriteString(clientConn, "HTTP/1.1 503 Service Unavailable\r\n\r\n")
-		clientConn.Close()
-		return
-	}
-
-	io.WriteString(clientConn, "HTTP/1.1 200 Connection established\r\n\r\n")
-
-	if buffered := rw.Reader.Buffered(); buffered > 0 {
-		peeked, _ := rw.Reader.Peek(buffered)
-		targetConn.Write(peeked)
-	}
-
-	go s.transfer(targetConn, clientConn)
-	go s.transfer(clientConn, targetConn)
-}
-
-func (s *Server) transfer(destination io.WriteCloser, source io.ReadCloser) {
-	defer destination.Close()
-	defer source.Close()
-
-	bufPtr := bufferPool.Get().(*[]byte)
-	defer bufferPool.Put(bufPtr)
-
-	io.CopyBuffer(destination, source, *bufPtr)
 }

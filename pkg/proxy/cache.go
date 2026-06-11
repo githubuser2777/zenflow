@@ -8,16 +8,28 @@ import (
 	"sync"
 )
 
+// HeaderField stores a single HTTP header key-value pair.
+type HeaderField struct {
+	Key   string
+	Value string
+}
+
 // CachedResponse stores HTTP headers and body bytes for a cached response.
 type CachedResponse struct {
-	Headers http.Header
+	Headers []HeaderField
 	Body    []byte
 }
 
 const maxCacheSize = 5 * 1024 * 1024 // 5MB per-item cap — DO NOT CHANGE
 
+type cacheKey struct {
+	host  string
+	path  string
+	query string
+}
+
 type cacheEntry struct {
-	key  string
+	key  cacheKey
 	resp CachedResponse
 	size int64 // estimateItemSize — used for totalSize accounting
 }
@@ -25,7 +37,7 @@ type cacheEntry struct {
 // Cache is a memory-bounded LRU cache.
 type Cache struct {
 	mu           sync.RWMutex
-	store        map[string]*list.Element
+	store        map[cacheKey]*list.Element
 	ll           *list.List
 	totalSize    int64
 	maxTotalSize int64
@@ -48,13 +60,13 @@ func NewCache() *Cache {
 // NewCacheWithLimit creates a new Cache with the specified total size limit in bytes.
 func NewCacheWithLimit(maxBytes int64) *Cache {
 	return &Cache{
-		store:        make(map[string]*list.Element),
+		store:        make(map[cacheKey]*list.Element),
 		ll:           list.New(),
 		maxTotalSize: maxBytes,
 	}
 }
 
-func (c *Cache) Get(key string) (CachedResponse, bool) {
+func (c *Cache) Get(key cacheKey) (CachedResponse, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -71,13 +83,11 @@ const (
 	entryOverheadBytes  = 100
 )
 
-func estimateItemSize(key string, resp CachedResponse) int64 {
-	size := int64(stringOverheadBytes+len(key)) + int64(len(resp.Body))
-	for k, vv := range resp.Headers {
-		size += int64(stringOverheadBytes+len(k)) + sliceOverheadBytes
-		for _, v := range vv {
-			size += int64(stringOverheadBytes + len(v))
-		}
+func estimateItemSize(key cacheKey, resp CachedResponse) int64 {
+	size := int64(stringOverheadBytes*3+len(key.host)+len(key.path)+len(key.query)) + int64(len(resp.Body))
+	size += sliceOverheadBytes
+	for _, field := range resp.Headers {
+		size += int64(stringOverheadBytes*2 + len(field.Key) + len(field.Value))
 	}
 	size += entryOverheadBytes
 	return size
@@ -86,9 +96,15 @@ func estimateItemSize(key string, resp CachedResponse) int64 {
 // Set stores a response in the cache. Items exceeding the per-item cap or total
 // limit are silently dropped. Existing entries for the same key are replaced.
 // LRU entries are evicted as needed to make room.
-func (c *Cache) Set(key string, headers http.Header, body []byte) {
-	
-	itemSize := estimateItemSize(key, CachedResponse{Headers: headers, Body: body})
+func (c *Cache) Set(key cacheKey, headers http.Header, body []byte) {
+	var h []HeaderField
+	for k, vv := range headers {
+		for _, v := range vv {
+			h = append(h, HeaderField{Key: k, Value: v})
+		}
+	}
+
+	itemSize := estimateItemSize(key, CachedResponse{Headers: h, Body: body})
 	// Per-item cap
 	if itemSize > maxCacheSize {
 		return
@@ -97,9 +113,6 @@ func (c *Cache) Set(key string, headers http.Header, body []byte) {
 	if itemSize > c.maxTotalSize {
 		return
 	}
-
-	// Copy headers to avoid mutations
-	h := headers.Clone()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

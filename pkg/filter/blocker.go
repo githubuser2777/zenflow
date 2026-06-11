@@ -13,10 +13,29 @@ type Blocker struct {
 }
 
 func normalizeDomain(d string) string {
-	d = strings.ToLower(d)
 	d = strings.TrimSuffix(d, ".")
 	d = strings.Trim(d, "[]")
-	return d
+
+	hasUpper := false
+	for i := 0; i < len(d); i++ {
+		if d[i] >= 'A' && d[i] <= 'Z' {
+			hasUpper = true
+			break
+		}
+	}
+	if !hasUpper {
+		return d
+	}
+
+	b := make([]byte, len(d))
+	for i := 0; i < len(d); i++ {
+		c := d[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	return string(b)
 }
 
 // NewBlocker creates a new Blocker with an initial list of blocked domains.

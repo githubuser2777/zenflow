@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestWatchLocalFile_EmptyFileClearsBlocklist(t *testing.T) {
 	}
 
 	// 2. Start watcher
-	WatchLocalFile(tmpFile.Name(), b, 100*time.Millisecond)
+	WatchLocalFile(context.Background(), tmpFile.Name(), b, 100*time.Millisecond)
 
 	// 3. Wait a bit, then overwrite file with garbage (e.g. user made a typo while editing)
 	time.Sleep(200 * time.Millisecond)

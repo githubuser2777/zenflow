@@ -85,6 +85,7 @@
 ## 🟡 CURRENTLY IN PROGRESS: Phase 5 (M5) — Optimization & Cleanup Pass
 
 The system is currently undergoing a final Phase 5 (M5) refactor focused on Clean Code and performance optimizations.
+> **Update (2026-06-11):** M2 Memory Optimization is complete. The teamwork swarm is now actively executing M3: Clean Code Refactoring. Structural clean code refactoring is occurring across key components including `server.go`, `cache.go`, `ratelimit.go`, and `blocker.go`. If quota runs out, resume from this point.
 
 ### 1. Memory Optimization & GC Pressure
 - Rà soát các luồng xử lý chính ("hot paths"), đặc biệt là `ServeHTTP`, `handleConnect`, và `pkg/proxy/cache.go`.
