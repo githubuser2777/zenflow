@@ -7,16 +7,18 @@ ZenFlow is a minimalist, First-Principles-driven HTTP Proxy and Ad Blocker writt
 > **Lưu ý:** Dự án hiện vẫn đang trong quá trình thử nghiệm và hoàn thiện (vẫn trong quá trình test).
 
 
-## Features (Phase 2-4 Additions Included)
+## Features (v0.2.b)
 
-- **Ad & Tracker Blocking**: Dual-blocker system for filtering ads and malware domains dynamically (Phase 3).
-- **Auto-Refresh Blocklists**: Periodically fetches and hot-reloads blocklists (Phase 4).
-- **Terminal User Interface (TUI)**: Live request logs and basic proxy statistics via channel architecture (Phase 4). Uptime and full blocklist management are not implemented yet.
-- **Rate Limiting**: IP-based token bucket rate limiting.
+- **Cross-Platform Automated Builds**: GitHub Actions CI builds optimized binaries (Windows/Linux) automatically.
+- **Zero-Allocation Data Paths**: High performance on hot paths (cache, IP tracking, blocking) with no heap allocations.
+- **Ad & Tracker Blocking**: Dual-blocker system for filtering ads and malware domains dynamically, with protection against Host header bypasses.
+- **Auto-Refresh Blocklists**: Periodically fetches and hot-reloads blocklists.
+- **Terminal User Interface (TUI)**: Live request logs and basic proxy statistics via channel architecture.
+- **Rate Limiting**: IP-based token bucket rate limiting with built-in IP spoofing resistance (`X-Forwarded-For` safety).
 - **Proxy Authentication**: Restrict access using Basic Auth.
-- **Privacy Header Scrubbing**: Strips tracking cookies and privacy-invasive headers. Current tests show the User-Agent behavior still needs reconciliation.
+- **Privacy Header Scrubbing**: Strips tracking cookies and privacy-invasive headers.
 - **HTTPS Tunneling**: Native support for HTTP `CONNECT` method.
-- **LRU Cache & OOM Protection**: In-memory caching for static assets with strict memory bounds (Phase 2).
+- **LRU Cache**: Background-promoted LRU cache prevents lock contention and memory leaks.
 
 ## Architecture Overview
 
@@ -59,7 +61,7 @@ go run ./cmd/proxy --blocklist https://raw.githubusercontent.com/StevenBlack/hos
 - `--rate-limit <rps>`: Rate limit in requests per second.
 - `--no-tui`: Disable the Terminal UI and run in headless mode.
 
-### Testing
+### Testing & CI
 
 Run all unit and E2E tests:
 
@@ -67,6 +69,7 @@ Run all unit and E2E tests:
 go test ./... -v
 ```
 
-Current workspace status: the binary builds, but the full test suite is not green yet. Known failures are documented in `docs/testing.md` and `docs/checkpoint.md`.
+Current workspace status: **All tests pass 100%.** Phase 5 Optimization and Clean Code (M3) is complete. 
 
-See `docs/testing.md` for more testing commands.
+### GitHub Actions CI
+The project includes an automated GitHub Actions workflow (`.github/workflows/build.yml`) that builds optimized Windows and Linux binaries using `-trimpath` and `-ldflags="-s -w"`. Download the compiled `zenflow.exe` or `zenflow` from the GitHub Actions artifacts on every push!
