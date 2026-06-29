@@ -1,7 +1,7 @@
 # ZenFlow
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
-![Build Status](https://github.com/zenflow/zenflow/actions/workflows/release.yml/badge.svg)
+![Build Status](https://github.com/githubuser2777/zenflow/actions/workflows/release.yml/badge.svg)
 
 A high-performance, minimalist HTTP/HTTPS proxy and ad blocker written in Go. Built with a focus on zero-allocation data paths and simplicity.
 
