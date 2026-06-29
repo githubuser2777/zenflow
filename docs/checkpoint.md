@@ -1,22 +1,22 @@
 # ZenFlow — Project Checkpoint
 
-> **Updated:** 2026-06-11 | **Status:** Milestone 3 (Clean Code Refactoring) DONE
+> **Updated:** 2026-06-12 | **Status:** Phase 5 (M5 Optimization) PAUSED — Quota Exhausted
 > **Purpose:** Resume context for next AI session. Read this file FIRST before starting any new work.
 > **Go Version:** `go 1.26.3` | **Module:** `zenflow`
 
 ---
 
-## 🚨 Latest Swarm Update (2026-06-11)
-- **Milestone 3 (Clean Code Refactoring)** has been successfully completed and verified.
-- Key improvements implemented:
-  - Decoupled client IP extraction utilities from rate limiting (SRP conformance).
-  - Eliminated cache read lock contention by shifting LRU promotions to a background worker using a buffered update channel, preventing memory leaks by heap-allocating the mutex to break the reference cycle.
-  - Replaced expensive error-based port splitting (`net.SplitHostPort`) with a custom zero-allocation splitter.
-  - Prevented IP spoofing in the rate limiter by restricting `X-Forwarded-For` trust to local/private network connections.
-  - Resolved middleware bypasses on empty Host header requests.
-  - Optimized cookie scrubbing and string case-insensitive matching on the hot path to eliminate heap allocations.
-- All unit, integration, and security tests compile and pass 100%.
-- Milestone 3 is marked as **DONE**.
+## 🚨 Latest Swarm Update (2026-06-12)
+- **M2: Memory Optimization & GC Pressure Reduction — ✅ COMPLETE.**
+  - `sync.Pool` buffer reuse implemented in `server.go`.
+  - `strings.ToLower` allocations eliminated in `serveFromCache` and `isStaticAsset`.
+  - New benchmark/stress tests committed: `pool_stress_test.go`, `alloc_bench_test.go`, `gc_bench_test.go`, `proxy_bench_test.go`.
+  - All changes pushed to GitHub (`dev` branch, commit `3e2f316`).
+- **M3: Clean Code Refactoring — 🟡 IN PROGRESS (Iteration 1, Explorers complete, Worker NOT yet spawned).**
+  - 3 Explorer agents analyzed the codebase for SRP violations and idiomatic Go improvements.
+  - Swarm stopped due to **quota exhaustion (429)**. Worker was NOT spawned.
+- **⚠️ WARNING:** M3 refactoring has NOT been applied to source files yet. Codebase is stable (M2 complete, tests should pass).
+- **How to recover:** Run `go test ./pkg/... -v` and `go test ./tests/e2e/... -v -timeout 120s` to confirm stability, then restart the swarm to execute M3 Worker + Reviewers + Cleanup.
 
 ---
 

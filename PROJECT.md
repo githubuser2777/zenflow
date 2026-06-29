@@ -9,10 +9,10 @@
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | Explore & Design | Examine the codebase and identify code smells and hot paths. | None | DONE |
-| 2 | Clean Code Refactoring (M3) | Refactor `server.go`, `cache.go`, `ratelimit.go`, and `blocker.go`. | Milestone 1 | DONE |
-| 3 | Performance Benchmarks (M4) | (CANCELLED per follow-up instructions) | Milestone 2 | CANCELLED |
-| 4 | Verification & Checkpoint | Verify tests/vet pass for M3, update `/root/zenflow/docs/checkpoint.md`, and pause. | Milestone 2 | DONE |
+| 1 | Diagnostics | Verify baseline tests pass. | None | DONE |
+| 2 | Clean Code Refactoring (M3) | Refactor `server.go`, `cache.go`, `ratelimit.go`, and `blocker.go`. | Milestone 1 | IN_PROGRESS (f5f73481-30d5-45b1-b5c4-73ba354db58e) |
+| 3 | Performance Benchmarks (M4) | Add/run benchmark tests (`BenchmarkServeHTTP`, etc.) and ensure metrics are reported. | Milestone 2 | PLANNED |
+| 4 | Workspace Cleanup (M5) | Clean artifacts per `docs/repo_cleanup.md` and update docs/checkpoint.md. | Milestone 3 | PLANNED |
 
 ## Interface Contracts
 - Proxy -> Cache: Cache retrieval and storage interfaces.
