@@ -15,15 +15,7 @@ func BenchmarkIsStaticAsset_Allocations(b *testing.B) {
 	}
 }
 
-func BenchmarkContainsIgnoreCase_Allocations(b *testing.B) {
-	s := "Cache-Control: private, max-age=0, no-cache"
-	substr := "no-cache"
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = containsIgnoreCase(s, substr)
-	}
-}
+
 
 func BenchmarkServeFromCache_Allocations(b *testing.B) {
 	server := NewCoreServer(false)

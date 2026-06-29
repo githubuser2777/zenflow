@@ -5,12 +5,6 @@ import (
 	"sync/atomic"
 )
 
-// Filter is the interface for domain blockers.
-type Filter interface {
-	IsBlocked(host string) (bool, string)
-	UpdateBlocklist(domains []string)
-}
-
 // Blocker is responsible for filtering out domains.
 type Blocker struct {
 	blockedDomains atomic.Value // stores map[string]bool
@@ -75,4 +69,35 @@ func (b *Blocker) UpdateBlocklist(domains []string) {
 		newBlocked[normalizeDomain(domain)] = true
 	}
 	b.blockedDomains.Store(newBlocked)
+}
+
+// Count returns the number of blocked domains.
+func (b *Blocker) Count() int {
+	m, _ := b.blockedDomains.Load().(map[string]bool)
+	return len(m)
+}
+
+// GetPreview returns a slice of up to n blocked domains for previewing.
+func (b *Blocker) GetPreview(n int) []string {
+	m, _ := b.blockedDomains.Load().(map[string]bool)
+	var preview []string
+	count := 0
+	for k := range m {
+		preview = append(preview, k)
+		count++
+		if count >= n {
+			break
+		}
+	}
+	return preview
+}
+
+// GetAll returns a slice of all blocked domains.
+func (b *Blocker) GetAll() []string {
+	m, _ := b.blockedDomains.Load().(map[string]bool)
+	var all []string
+	for k := range m {
+		all = append(all, k)
+	}
+	return all
 }

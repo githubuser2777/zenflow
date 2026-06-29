@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestTotalSizeEnforcement(t *testing.T) {
@@ -36,6 +37,8 @@ func TestLRUEvictionOrder(t *testing.T) {
 		t.Errorf("expected A to be in cache")
 	}
 
+	// Sleep to let the background worker process the LRU update
+	time.Sleep(10 * time.Millisecond)
 	// Insert D — must evict LRU entry (B since A was accessed)
 	c.Set(cacheKey{path: "D"}, http.Header{}, oneKB)
 
