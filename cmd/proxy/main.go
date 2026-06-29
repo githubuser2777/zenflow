@@ -20,11 +20,8 @@ import (
 )
 
 func main() {
-	rootCtx, cancelRoot := context.WithCancel(context.Background())
-	defer cancelRoot()
-
 	blocklistFlag := flag.String("blocklist", "hosts.txt", "Path or URL to the blocklist file")
-	malwareBlocklistFlag := flag.String("malware-blocklist", "", "Path or URL to the malware blocklist file")
+	malwareBlocklistFlag := flag.String("malware-blocklist", "malware.txt", "Path or URL to the malware blocklist file")
 	portFlag := flag.String("port", "8080", "Port to listen on")
 	authFlag := flag.String("auth", "", "Basic auth credentials (user:pass)")
 	rateLimitFlag := flag.String("rate-limit", "", "Rate limit in requests per second")
@@ -48,6 +45,22 @@ func main() {
 		log.Fatalf("Failed to open log file: %v", err)
 	}
 	log.SetOutput(logFile)
+	defer logFile.Close()
+
+	for {
+		tui.RestartRequested = false
+		runProxy(blocklistFlag, malwareBlocklistFlag, portFlag, noTUIFlag, privacyFlag)
+		if !tui.RestartRequested {
+			break
+		}
+		
+		log.Println("Restarting ZenFlow Proxy in-process...")
+	}
+}
+
+func runProxy(blocklistFlag, malwareBlocklistFlag, portFlag *string, noTUIFlag, privacyFlag *bool) {
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	defer cancelRoot()
 
 	log.Println("Starting ZenFlow HTTP Proxy...")
 
@@ -129,13 +142,13 @@ func main() {
 	}()
 
 	// Start TUI or wait for signal
-	if *noTUIFlag {
+	if noTUIFlag != nil && *noTUIFlag {
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, os.Interrupt, os.Kill)
 		<-quit
 		log.Println("\nReceived interrupt signal, shutting down proxy server...")
 	} else {
-		p := tea.NewProgram(tui.New(), tea.WithAltScreen())
+		p := tea.NewProgram(tui.New(blocker, malwareBlocker), tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
 			log.Printf("Error starting TUI: %v", err)
 		}
