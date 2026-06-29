@@ -20,7 +20,7 @@ func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
 	return h
 }
 
-func RateLimitMiddleware(limiter ratelimit.Limiter, rateLimitStr string) Middleware {
+func RateLimitMiddleware(limiter *ratelimit.TokenBucketLimiter, rateLimitStr string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := netutil.ExtractIP(r)

@@ -5,58 +5,36 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/time/rate"
 	"zenflow/pkg/netutil"
 )
 
 var ErrTooManyRequests = errors.New("too many requests")
 
-// Limiter defines the rate limiter interface.
-type Limiter interface {
-	CheckRateLimit(key string) error
-}
-
-type bucket struct {
-	mu         sync.Mutex
-	tokens     float64
-	lastRefill time.Time
-	lastSeen   time.Time
-}
-
-type limiterShard struct {
-	mu      sync.RWMutex
-	buckets map[string]*bucket
-}
-
+// TokenBucketLimiter uses x/time/rate for rate limiting.
 type TokenBucketLimiter struct {
 	rate      int
 	burst     int
-	shards    [32]*limiterShard
+	mu        sync.Mutex
+	limiters  map[string]*limiterEntry
 	stopClean chan struct{}
 }
 
-// NewLimiter creates a new sharded token bucket rate limiter.
-func NewLimiter(rate, burst int) *TokenBucketLimiter {
+type limiterEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
+// NewLimiter creates a new rate limiter.
+func NewLimiter(r, burst int) *TokenBucketLimiter {
 	l := &TokenBucketLimiter{
-		rate:      rate,
+		rate:      r,
 		burst:     burst,
+		limiters:  make(map[string]*limiterEntry),
 		stopClean: make(chan struct{}),
-	}
-	for i := 0; i < 32; i++ {
-		l.shards[i] = &limiterShard{
-			buckets: make(map[string]*bucket),
-		}
 	}
 	go l.cleanup()
 	return l
-}
-
-func getShardIndex(key string) uint32 {
-	var hash uint32 = 2166136261
-	for i := 0; i < len(key); i++ {
-		hash ^= uint32(key[i])
-		hash *= 16777619
-	}
-	return hash % 32
 }
 
 func canonicalizeIP(rawIP string) string {
@@ -65,52 +43,22 @@ func canonicalizeIP(rawIP string) string {
 
 // CheckRateLimit checks the rate limit for the given key (e.g. client IP).
 func (l *TokenBucketLimiter) CheckRateLimit(key string) error {
-	shardIdx := getShardIndex(key)
-	shard := l.shards[shardIdx]
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-	now := time.Now()
-
-	shard.mu.RLock()
-	b, ok := shard.buckets[key]
-	shard.mu.RUnlock()
-
+	entry, ok := l.limiters[key]
 	if !ok {
-		shard.mu.Lock()
-		b, ok = shard.buckets[key]
-		if !ok {
-			b = &bucket{
-				tokens:     float64(l.burst),
-				lastRefill: now,
-				lastSeen:   now,
-			}
-			shard.buckets[key] = b
+		entry = &limiterEntry{
+			limiter: rate.NewLimiter(rate.Limit(l.rate), l.burst),
 		}
-		shard.mu.Unlock()
+		l.limiters[key] = entry
 	}
+	entry.lastSeen = time.Now()
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	elapsed := now.Sub(b.lastRefill).Seconds()
-	newTokens := elapsed * float64(l.rate)
-	if newTokens > 0 {
-		b.tokens += newTokens
-		b.lastRefill = now
+	if !entry.limiter.Allow() {
+		return ErrTooManyRequests
 	}
-	b.lastSeen = now
-
-	if b.tokens >= 1.0 {
-		b.tokens -= 1.0
-		if b.tokens > float64(l.burst) {
-			b.tokens = float64(l.burst)
-		}
-		return nil
-	}
-
-	if b.tokens > float64(l.burst) {
-		b.tokens = float64(l.burst)
-	}
-	return ErrTooManyRequests
+	return nil
 }
 
 func (l *TokenBucketLimiter) cleanup() {
@@ -121,19 +69,13 @@ func (l *TokenBucketLimiter) cleanup() {
 		select {
 		case <-ticker.C:
 			now := time.Now()
-			for _, s := range l.shards {
-				s.mu.Lock()
-				for key, b := range s.buckets {
-					b.mu.Lock()
-					lastSeen := b.lastSeen
-					b.mu.Unlock()
-
-					if now.Sub(lastSeen) > 5*time.Minute {
-						delete(s.buckets, key)
-					}
+			l.mu.Lock()
+			for k, entry := range l.limiters {
+				if now.Sub(entry.lastSeen) > 5*time.Minute {
+					delete(l.limiters, k)
 				}
-				s.mu.Unlock()
 			}
+			l.mu.Unlock()
 		case <-l.stopClean:
 			return
 		}

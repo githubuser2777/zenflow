@@ -3,7 +3,6 @@ package proxy
 import (
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"zenflow/pkg/filter"

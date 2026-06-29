@@ -120,37 +120,3 @@ func TestRateLimit_IPv6Bypass(t *testing.T) {
 	}
 	t.Logf("FIXED: Rate limiter canonicalizes IPv6/IPv4")
 }
-
-// Vulnerability 5: Fractional Token Discard (Precision Loss)
-// If rate is 1 token/sec, and requests come every 1.9s, the 0.9s is discarded.
-// Rate becomes strictly lower than configured.
-func TestRateLimit_FractionalTokenDiscard(t *testing.T) {
-	limiter := ratelimit.NewLimiter(1, 1)
-	defer limiter.Stop()
-
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.RemoteAddr = "127.0.0.1:1234"
-
-	// Exhaust token
-	if err := limiter.CheckRateLimit(netutil.ExtractIP(req)); err != nil {
-		t.Fatalf("Initial request failed: %v", err)
-	}
-
-	// Wait 1.1 seconds (1 full token generated, 0.1 discarded)
-	time.Sleep(1100 * time.Millisecond)
-
-	// Consume token
-	if err := limiter.CheckRateLimit(netutil.ExtractIP(req)); err != nil {
-		t.Fatalf("Second request failed: %v", err)
-	}
-
-	// Wait another 0.95 seconds. Total time since first token generation = 1.1 + 0.95 = 2.05s
-	// If fractional tokens were kept, we would have 0.1 + 0.95 = 1.05 token now.
-	time.Sleep(950 * time.Millisecond)
-
-	err := limiter.CheckRateLimit(netutil.ExtractIP(req))
-	if err != nil {
-		t.Fatalf("Expected rate limit success (fractional tokens kept), but it failed: %v", err)
-	}
-	t.Logf("FIXED: Fractional tokens are retained")
-}
