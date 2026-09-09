@@ -40,7 +40,7 @@
 - [x] `.git/` — Git repository initialized
 - [x] `.github/workflows/release.yml` — GitHub Actions CI/CD uses `go-version: '1.26'`
 - [x] `git_push.ps1` — PowerShell script to push to GitHub
-- [x] `LICENSE` (MIT), `CONTRIBUTING.md`, `SECURITY.md`
+- [x] `LICENSE` (GPL-3.0-only), `CONTRIBUTING.md`, `SECURITY.md`
 - [x] `.gitignore` — Covers `*.exe`, `*.log`, `dist/`, `vendor/`, `.agents/`, and test artifacts.
 
 ### Documentation
