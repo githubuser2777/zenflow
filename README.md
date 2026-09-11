@@ -1,6 +1,6 @@
 # ZenFlow
 
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
 ![Build Status](https://github.com/githubuser2777/zenflow/actions/workflows/release.yml/badge.svg)
 
 A high-performance, minimalist HTTP/HTTPS proxy and ad blocker written in Go. Built with a focus on zero-allocation data paths and simplicity.
@@ -47,3 +47,8 @@ See the `docs/` directory for architecture details, system design, and testing f
 ```bash
 go test ./...
 ```
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0-only). See [`LICENSE`](LICENSE) for details.
+
